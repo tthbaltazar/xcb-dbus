@@ -1,13 +1,140 @@
 #include <stdio.h>
 #include <poll.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include <xcb/xcb.h>
+
+#include <dbus/dbus.h>
+
+static DBusHandlerResult echo_handle(DBusConnection *connection, DBusMessage *message, void *data)
+{
+	const char *interface = dbus_message_get_interface(message);
+	const char *member = dbus_message_get_member(message);
+	printf("%s %s\n", interface, member);
+
+	if (strcmp(interface, "org.freedesktop.DBus.Introspectable") == 0) {
+		DBusMessage *reply = dbus_message_new_method_return(message);
+		const char *str =
+			"<node>"
+				"<interface name=\"com.example.Echo\">"
+					"<method name=\"Echo\">"
+						"<arg name=\"data\" type=\"s\"/>"
+					"</method>"
+				"</interface>"
+			"</node>";
+		dbus_message_append_args(reply, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID);
+
+		dbus_connection_send(connection, reply, NULL);
+
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	if (strcmp(interface, "com.example.Echo") == 0) {
+		if (strcmp(member, "Echo") == 0) {
+			const char *data = NULL;
+			dbus_message_get_args(message, NULL, DBUS_TYPE_STRING, &data, DBUS_TYPE_INVALID);
+
+			printf("%s\n", data);
+
+			DBusMessage *reply = dbus_message_new_method_return(message);
+			dbus_message_append_args(reply, DBUS_TYPE_STRING, &data, DBUS_TYPE_INVALID);
+
+			dbus_connection_send(connection, reply, NULL);
+
+			return DBUS_HANDLER_RESULT_HANDLED;
+		}
+
+		/* TODO: return invalid member error */
+	}
+
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+static const struct DBusObjectPathVTable echo_vtable = {
+	.message_function = echo_handle
+};
+
+struct watch_list {
+	int count;
+	DBusWatch **items;
+};
+
+static dbus_bool_t add_watch(DBusWatch *watch, void *data)
+{
+	printf("add_watch\n");
+
+	struct watch_list *list = data;
+
+	for(int i = 0; i < list->count; i++) {
+		if(list->items[i] == watch) {
+			fprintf(stderr, "WARNING: duplicate dbus watch not added\n");
+			return 1;
+		}
+	}
+
+	list->items = reallocarray(list->items, list->count + 1, sizeof(list->items[0]));
+	list->items[list->count] = watch;
+	list->count += 1;
+	return 1;
+}
+
+static void remove_watch(DBusWatch *watch, void *data)
+{
+	struct watch_list *list = data;
+
+	int i = 0;
+
+	/* find item */
+	for(; i < list->count; i++) {
+		if (list->items[i] == watch) {
+			break;
+		}
+	}
+
+	/* shift elements after it back */
+	for(; i < list->count; i++) {
+		list->items[i] = list->items[i + 1];
+	}
+
+	/* resize */
+	list->count -= 1;
+	list->items = reallocarray(list->items, list->count, sizeof(list->items[0]));
+}
 
 int main(int argc, char **argv)
 {
 	xcb_connection_t *x_con = xcb_connect(NULL, 0);
 	if (x_con == NULL) {
 		fprintf(stderr, "Failed to connect to x server\n");
+		return 1;
+	}
+
+	DBusConnection *dbus_con = dbus_bus_get(DBUS_BUS_SESSION, NULL);
+	if (dbus_con == NULL) {
+		fprintf(stderr, "Failed to connect to session bus\n");
+		return 1;
+	}
+
+	const char *dbus_id = "com.example.echo";
+	if (!dbus_bus_request_name(dbus_con, dbus_id, 0, NULL)) {
+		fprintf(stderr, "WARNING: failed to claim bus name %s\n", dbus_id);
+		dbus_id = dbus_bus_get_unique_name(dbus_con);
+	}
+	printf("INFO: dbus name is %s\n", dbus_id);
+
+	struct watch_list watch_list;
+	memset(&watch_list, 0, sizeof(watch_list));
+	dbus_connection_set_watch_functions(
+		dbus_con,
+		add_watch,
+		remove_watch,
+		NULL,
+		&watch_list,
+		NULL);
+
+	if (!dbus_connection_register_object_path(dbus_con, "/com/example/echo", &echo_vtable, NULL)) {
+		fprintf(stderr, "Failed to register echo object\n");
 		return 1;
 	}
 
@@ -37,11 +164,19 @@ int main(int argc, char **argv)
 
 	xcb_flush(x_con);
 
+	struct pollfd *fds = NULL;
 	for(;;) {
-		struct pollfd fds[1];
+		fds = reallocarray(fds, 1 + watch_list.count, sizeof(fds[0]));
+
 		fds[0].fd = xcb_get_file_descriptor(x_con);
 		fds[0].events = POLLIN;
-		if (poll(fds, 1, -1) < 0) {
+
+		for(int i = 0; i < watch_list.count; i++) {
+			fds[i + 1].fd = dbus_watch_get_unix_fd(watch_list.items[i]);
+			fds[i + 1].events = dbus_watch_get_flags(watch_list.items[i]);
+		}
+
+		if (poll(fds, 1 + watch_list.count, -1) < 0) {
 			fprintf(stderr, "Failed to poll\n");
 			return 1;
 		}
@@ -67,6 +202,14 @@ int main(int argc, char **argv)
 				} break;
 			}
 		}
+
+		for(int i = 0; i < watch_list.count; i++) {
+			if(fds[i + 1].revents) {
+				dbus_watch_handle(watch_list.items[i], fds[i + 1].revents);
+			}
+		}
+
+		dbus_connection_dispatch(dbus_con);
 	}
 
 	return 0;
