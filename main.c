@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <poll.h>
 
 #include <xcb/xcb.h>
 
@@ -37,24 +38,34 @@ int main(int argc, char **argv)
 	xcb_flush(x_con);
 
 	for(;;) {
-		xcb_generic_event_t *event = xcb_wait_for_event(x_con);
-		if (event == NULL) {
-			fprintf(stderr, "XCB IO error\n");
+		struct pollfd fds[1];
+		fds[0].fd = xcb_get_file_descriptor(x_con);
+		fds[0].events = POLLIN;
+		if (poll(fds, 1, -1) < 0) {
+			fprintf(stderr, "Failed to poll\n");
 			return 1;
 		}
 
-		switch(event->response_type) {
-			case 0: {
-				fprintf(stderr, "X11 error event\n");
+		if (fds[0].revents) {
+			xcb_generic_event_t *event = xcb_poll_for_event(x_con);
+			if (event == NULL) {
+				fprintf(stderr, "XCB IO error\n");
 				return 1;
-			} break;
-			case XCB_EXPOSE: {
-				printf("expose\n");
-				// TODO: fill window with color
-			} break;
-			default: {
-				fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
-			} break;
+			}
+
+			switch(event->response_type) {
+				case 0: {
+					fprintf(stderr, "X11 error event\n");
+					return 1;
+				} break;
+				case XCB_EXPOSE: {
+					printf("expose\n");
+					// TODO: fill window with color
+				} break;
+				default: {
+					fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
+				} break;
+			}
 		}
 	}
 
