@@ -108,7 +108,79 @@ struct window {
 	xcb_gcontext_t gc;
 };
 
-struct window *create_window(xcb_connection_t *x_con)
+static void window_set_color(struct window *window, int color)
+{
+	int gc_value_mask = XCB_GC_FOREGROUND;
+	int gc_values[] = {
+		color
+	};
+	xcb_change_gc(window->x_con, window->gc, gc_value_mask, gc_values);
+
+	xcb_get_geometry_cookie_t ggc = xcb_get_geometry(window->x_con, window->win);
+	xcb_get_geometry_reply_t *reply = xcb_get_geometry_reply(window->x_con, ggc, NULL);
+	if (reply == NULL) {
+		fprintf(stderr, "ERROR: failed to get window geometry\n");
+	} else {
+		xcb_rectangle_t rect = {
+			.x = 0,
+			.y = 0,
+			.width = reply->width,
+			.height = reply->height
+		};
+		xcb_poly_fill_rectangle(window->x_con, window->win, window->gc, 1, &rect);
+	}
+
+	xcb_flush(window->x_con);
+}
+
+static DBusHandlerResult window_handle_dbus_message(DBusConnection *connection, DBusMessage *message, void *data)
+{
+	const char *interface = dbus_message_get_interface(message);
+	const char *member = dbus_message_get_member(message);
+	printf("%s %s\n", interface, member);
+
+	if (strcmp(interface, "org.freedesktop.DBus.Introspectable") == 0) {
+		DBusMessage *reply = dbus_message_new_method_return(message);
+		const char *str =
+			"<node>"
+				"<interface name=\"com.example.Window\">"
+					"<method name=\"SetColor\">"
+						"<arg name=\"color\" type=\"i\"/>"
+					"</method>"
+				"</interface>"
+			"</node>";
+		dbus_message_append_args(reply, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID);
+
+		dbus_connection_send(connection, reply, NULL);
+
+		return DBUS_HANDLER_RESULT_HANDLED;
+	}
+
+	if (strcmp(interface, "com.example.Window") == 0) {
+		struct window *window = data;
+		if (strcmp(member, "SetColor") == 0) {
+			int color;
+			dbus_message_get_args(message, NULL, DBUS_TYPE_INT32, &color, DBUS_TYPE_INVALID);
+
+			window_set_color(window, color);
+
+			DBusMessage *reply = dbus_message_new_method_return(message);
+			dbus_connection_send(connection, reply, NULL);
+
+			return DBUS_HANDLER_RESULT_HANDLED;
+		}
+
+		/* TODO: return invalid member error */
+	}
+
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+}
+
+static const DBusObjectPathVTable window_dbus_vtable = {
+	.message_function = window_handle_dbus_message,
+};
+
+struct window *create_window(xcb_connection_t *x_con, DBusConnection *dbus_con)
 {
 	xcb_window_t root_win = xcb_setup_roots_iterator(xcb_get_setup(x_con)).data->root;
 
@@ -147,6 +219,13 @@ struct window *create_window(xcb_connection_t *x_con)
 	w->x_con = x_con;
 	w->win = win;
 	w->gc = gc;
+
+	char path[256];
+	snprintf(path, 256, "/com/example/windows/%i", win);
+	if (!dbus_connection_register_object_path(dbus_con, path, &window_dbus_vtable, w)) {
+		fprintf(stderr, "Failed to register window %i object\n", win);
+	}
+
 	return w;
 }
 
@@ -201,7 +280,7 @@ int main(int argc, char **argv)
 	int windows_count = 2;
 	struct window **windows = calloc(windows_count, sizeof(windows[0]));
 	for (int i = 0; i < windows_count; i++) {
-		windows[i] = create_window(x_con);
+		windows[i] = create_window(x_con, dbus_con);
 	}
 
 	struct pollfd *fds = NULL;
