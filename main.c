@@ -160,6 +160,13 @@ int main(int argc, char **argv)
 		value_mask, values
 	);
 
+	xcb_gcontext_t gc = xcb_generate_id(x_con);
+	int gc_value_mask = XCB_GC_FOREGROUND;
+	int gc_values[] = {
+		0xff00ff
+	};
+	xcb_create_gc(x_con, gc, win, gc_value_mask, gc_values);
+
 	xcb_map_window(x_con, win);
 
 	xcb_flush(x_con);
@@ -195,7 +202,15 @@ int main(int argc, char **argv)
 				} break;
 				case XCB_EXPOSE: {
 					printf("expose\n");
-					// TODO: fill window with color
+					xcb_expose_event_t *expose_event = event;
+					xcb_rectangle_t rect = {
+						.x = expose_event->x,
+						.y = expose_event->y,
+						.width = expose_event->width,
+						.height = expose_event->height
+					};
+					xcb_poly_fill_rectangle(x_con, win, gc, 1, &rect);
+					xcb_flush(x_con);
 				} break;
 				default: {
 					fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
