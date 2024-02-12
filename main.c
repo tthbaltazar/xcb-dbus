@@ -102,6 +102,66 @@ static void remove_watch(DBusWatch *watch, void *data)
 	list->items = reallocarray(list->items, list->count, sizeof(list->items[0]));
 }
 
+struct window {
+	xcb_connection_t *x_con;
+	xcb_window_t win;
+	xcb_gcontext_t gc;
+};
+
+struct window *create_window(xcb_connection_t *x_con)
+{
+	xcb_window_t root_win = xcb_setup_roots_iterator(xcb_get_setup(x_con)).data->root;
+
+	xcb_window_t win = xcb_generate_id(x_con);
+
+	xcb_cw_t value_mask = XCB_CW_EVENT_MASK;
+	int values[1] = {
+		XCB_EVENT_MASK_EXPOSURE
+	};
+
+	xcb_create_window(
+		x_con,
+		XCB_COPY_FROM_PARENT,
+		win,
+		root_win,
+		0, 0,
+		512, 512,
+		0,
+		XCB_WINDOW_CLASS_INPUT_OUTPUT,
+		XCB_COPY_FROM_PARENT,
+		value_mask, values
+	);
+
+	xcb_gcontext_t gc = xcb_generate_id(x_con);
+	int gc_value_mask = XCB_GC_FOREGROUND;
+	int gc_values[] = {
+		0xff00ff
+	};
+	xcb_create_gc(x_con, gc, win, gc_value_mask, gc_values);
+
+	xcb_map_window(x_con, win);
+
+	xcb_flush(x_con);
+
+	struct window *w = calloc(1, sizeof(*w));
+	w->x_con = x_con;
+	w->win = win;
+	w->gc = gc;
+	return w;
+}
+
+void window_expose(struct window *window, xcb_expose_event_t *expose_event)
+{
+	xcb_rectangle_t rect = {
+		.x = expose_event->x,
+		.y = expose_event->y,
+		.width = expose_event->width,
+		.height = expose_event->height
+	};
+	xcb_poly_fill_rectangle(window->x_con, window->win, window->gc, 1, &rect);
+	xcb_flush(window->x_con);
+}
+
 int main(int argc, char **argv)
 {
 	xcb_connection_t *x_con = xcb_connect(NULL, 0);
@@ -138,38 +198,11 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
-	xcb_window_t root_win = xcb_setup_roots_iterator(xcb_get_setup(x_con)).data->root;
-
-	xcb_window_t win = xcb_generate_id(x_con);
-
-	xcb_cw_t value_mask = XCB_CW_EVENT_MASK;
-	int values[1] = {
-		XCB_EVENT_MASK_EXPOSURE
-	};
-
-	xcb_create_window(
-		x_con,
-		XCB_COPY_FROM_PARENT,
-		win,
-		root_win,
-		0, 0,
-		512, 512,
-		0,
-		XCB_WINDOW_CLASS_INPUT_OUTPUT,
-		XCB_COPY_FROM_PARENT,
-		value_mask, values
-	);
-
-	xcb_gcontext_t gc = xcb_generate_id(x_con);
-	int gc_value_mask = XCB_GC_FOREGROUND;
-	int gc_values[] = {
-		0xff00ff
-	};
-	xcb_create_gc(x_con, gc, win, gc_value_mask, gc_values);
-
-	xcb_map_window(x_con, win);
-
-	xcb_flush(x_con);
+	int windows_count = 2;
+	struct window **windows = calloc(windows_count, sizeof(windows[0]));
+	for (int i = 0; i < windows_count; i++) {
+		windows[i] = create_window(x_con);
+	}
 
 	struct pollfd *fds = NULL;
 	for(;;) {
@@ -207,14 +240,11 @@ int main(int argc, char **argv)
 					case XCB_EXPOSE: {
 						printf("expose\n");
 						xcb_expose_event_t *expose_event = event;
-						xcb_rectangle_t rect = {
-							.x = expose_event->x,
-							.y = expose_event->y,
-							.width = expose_event->width,
-							.height = expose_event->height
-						};
-						xcb_poly_fill_rectangle(x_con, win, gc, 1, &rect);
-						xcb_flush(x_con);
+						for(int i = 0; i < windows_count; i++) {
+							if (windows[i]->win == expose_event->window) {
+								window_expose(windows[i], expose_event);
+							}
+						}
 					} break;
 					default: {
 						fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
