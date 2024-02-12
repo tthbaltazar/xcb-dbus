@@ -189,32 +189,37 @@ int main(int argc, char **argv)
 		}
 
 		if (fds[0].revents) {
-			xcb_generic_event_t *event = xcb_poll_for_event(x_con);
-			if (event == NULL) {
-				fprintf(stderr, "XCB IO error\n");
-				return 1;
-			}
+			for(;;) {
+				xcb_generic_event_t *event = xcb_poll_for_event(x_con);
+				if (event == NULL) {
+					if (xcb_connection_has_error(x_con)) {
+						fprintf(stderr, "XCB IO error\n");
+						return 1;
+					}
+					break;
+				}
 
-			switch(event->response_type) {
-				case 0: {
-					fprintf(stderr, "X11 error event\n");
-					return 1;
-				} break;
-				case XCB_EXPOSE: {
-					printf("expose\n");
-					xcb_expose_event_t *expose_event = event;
-					xcb_rectangle_t rect = {
-						.x = expose_event->x,
-						.y = expose_event->y,
-						.width = expose_event->width,
-						.height = expose_event->height
-					};
-					xcb_poly_fill_rectangle(x_con, win, gc, 1, &rect);
-					xcb_flush(x_con);
-				} break;
-				default: {
-					fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
-				} break;
+				switch(event->response_type) {
+					case 0: {
+						fprintf(stderr, "X11 error event\n");
+						return 1;
+					} break;
+					case XCB_EXPOSE: {
+						printf("expose\n");
+						xcb_expose_event_t *expose_event = event;
+						xcb_rectangle_t rect = {
+							.x = expose_event->x,
+							.y = expose_event->y,
+							.width = expose_event->width,
+							.height = expose_event->height
+						};
+						xcb_poly_fill_rectangle(x_con, win, gc, 1, &rect);
+						xcb_flush(x_con);
+					} break;
+					default: {
+						fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
+					} break;
+				}
 			}
 		}
 
