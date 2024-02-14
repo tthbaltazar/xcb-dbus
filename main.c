@@ -108,6 +108,28 @@ struct window {
 	xcb_gcontext_t gc;
 };
 
+struct known_atoms {
+	xcb_atom_t WM_DELETE_WINDOW;
+	xcb_atom_t WM_PROTOCOLS;
+};
+
+static void get_known_atoms(xcb_connection_t *x_con, struct known_atoms *known_atoms)
+{
+	xcb_intern_atom_cookie_t cookie_wm_protocols = xcb_intern_atom(x_con, 0, 12, "WM_PROTOCOLS");
+	xcb_intern_atom_cookie_t cookie_wm_delete_window = xcb_intern_atom(x_con, 0, 16, "WM_DELETE_WINDOW");
+
+	xcb_intern_atom_reply_t *reply_wm_protocols = xcb_intern_atom_reply(x_con, cookie_wm_protocols, NULL);
+	if (reply_wm_protocols != NULL) {
+		known_atoms->WM_PROTOCOLS = reply_wm_protocols->atom;
+		free(reply_wm_protocols);
+	}
+	xcb_intern_atom_reply_t *reply_wm_delete_window = xcb_intern_atom_reply(x_con, cookie_wm_delete_window, NULL);
+	if (reply_wm_delete_window != NULL) {
+		known_atoms->WM_DELETE_WINDOW = reply_wm_delete_window->atom;
+		free(reply_wm_delete_window);
+	}
+}
+
 static void window_set_color(struct window *window, int color)
 {
 	int gc_value_mask = XCB_GC_FOREGROUND;
@@ -180,7 +202,7 @@ static const DBusObjectPathVTable window_dbus_vtable = {
 	.message_function = window_handle_dbus_message,
 };
 
-struct window *create_window(xcb_connection_t *x_con, DBusConnection *dbus_con)
+struct window *create_window(xcb_connection_t *x_con, DBusConnection *dbus_con, struct known_atoms *known_atoms)
 {
 	xcb_window_t root_win = xcb_setup_roots_iterator(xcb_get_setup(x_con)).data->root;
 
@@ -202,6 +224,21 @@ struct window *create_window(xcb_connection_t *x_con, DBusConnection *dbus_con)
 		XCB_WINDOW_CLASS_INPUT_OUTPUT,
 		XCB_COPY_FROM_PARENT,
 		value_mask, values
+	);
+
+	int wm_protocols_values[] = {
+		known_atoms->WM_DELETE_WINDOW,
+	};
+
+	xcb_change_property(
+		x_con,
+		XCB_PROP_MODE_REPLACE,
+		win,
+		known_atoms->WM_PROTOCOLS,
+		XCB_ATOM_ATOM,
+		32,
+		1,
+		wm_protocols_values
 	);
 
 	xcb_gcontext_t gc = xcb_generate_id(x_con);
@@ -277,10 +314,13 @@ int main(int argc, char **argv)
 		return 1;
 	}
 
+	struct known_atoms known_atoms;
+	get_known_atoms(x_con, &known_atoms);
+
 	int windows_count = 2;
 	struct window **windows = calloc(windows_count, sizeof(windows[0]));
 	for (int i = 0; i < windows_count; i++) {
-		windows[i] = create_window(x_con, dbus_con);
+		windows[i] = create_window(x_con, dbus_con, &known_atoms);
 	}
 
 	struct pollfd *fds = NULL;
@@ -324,6 +364,10 @@ int main(int argc, char **argv)
 								window_expose(windows[i], expose_event);
 							}
 						}
+					} break;
+					case XCB_CLIENT_MESSAGE:
+					case XCB_CLIENT_MESSAGE | 128: {
+						printf("ClientMessage\n");
 					} break;
 					default: {
 						fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
