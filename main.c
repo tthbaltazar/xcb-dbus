@@ -26,6 +26,7 @@ static DBusHandlerResult echo_handle(DBusConnection *connection, DBusMessage *me
 		dbus_message_append_args(reply, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID);
 
 		dbus_connection_send(connection, reply, NULL);
+		dbus_message_unref(reply);
 
 		return DBUS_HANDLER_RESULT_HANDLED;
 	}
@@ -41,6 +42,7 @@ static DBusHandlerResult echo_handle(DBusConnection *connection, DBusMessage *me
 			dbus_message_append_args(reply, DBUS_TYPE_STRING, &data, DBUS_TYPE_INVALID);
 
 			dbus_connection_send(connection, reply, NULL);
+			dbus_message_unref(reply);
 
 			return DBUS_HANDLER_RESULT_HANDLED;
 		}
@@ -128,6 +130,8 @@ static void window_set_color(struct window *window, int color)
 			.height = reply->height
 		};
 		xcb_poly_fill_rectangle(window->x_con, window->win, window->gc, 1, &rect);
+
+		free(reply);
 	}
 
 	xcb_flush(window->x_con);
@@ -152,6 +156,7 @@ static DBusHandlerResult window_handle_dbus_message(DBusConnection *connection, 
 		dbus_message_append_args(reply, DBUS_TYPE_STRING, &str, DBUS_TYPE_INVALID);
 
 		dbus_connection_send(connection, reply, NULL);
+		dbus_message_unref(reply);
 
 		return DBUS_HANDLER_RESULT_HANDLED;
 	}
@@ -166,6 +171,7 @@ static DBusHandlerResult window_handle_dbus_message(DBusConnection *connection, 
 
 			DBusMessage *reply = dbus_message_new_method_return(message);
 			dbus_connection_send(connection, reply, NULL);
+			dbus_message_unref(reply);
 
 			return DBUS_HANDLER_RESULT_HANDLED;
 		}
@@ -329,6 +335,8 @@ int main(int argc, char **argv)
 						fprintf(stderr, "WARNING: Unknown X11 event type: %d\n", event->response_type);
 					} break;
 				}
+
+				free(event);
 			}
 		}
 
