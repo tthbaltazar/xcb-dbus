@@ -338,7 +338,9 @@ int main(int argc, char **argv)
 			}
 		}
 
-		dbus_connection_dispatch(dbus_con);
+		while (dbus_connection_get_dispatch_status(dbus_con) != DBUS_DISPATCH_COMPLETE) {
+			dbus_connection_dispatch(dbus_con);
+		}
 	}
 
 	return 0;
